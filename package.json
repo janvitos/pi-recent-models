@@ -1,0 +1,41 @@
+{
+  "name": "@janvitos/pi-recent-models",
+  "version": "0.1.0",
+  "description": "Show the five most recently used models above Pi's complete model list.",
+  "type": "module",
+  "license": "MIT",
+  "author": "janvitos",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/janvitos/pi-recent-models.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "models",
+    "mru"
+  ],
+  "engines": {
+    "node": ">=22.6"
+  },
+  "files": [
+    "index.ts",
+    "utils.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test utils.test.ts",
+    "prepublishOnly": "npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
