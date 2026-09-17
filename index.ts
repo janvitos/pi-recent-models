@@ -5,30 +5,28 @@ import {
 	ModelSelectorComponent,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import {
 	decodeHistory,
 	encodeHistory,
-	getRecentModels,
+	modelKey,
+	orderByRecentUse,
 	promoteModel,
 	type ModelReference,
 } from "./utils.ts";
 
 const HISTORY_FILE = path.join(getAgentDir(), "recent-models.json");
 const PATCH_KEY = Symbol.for("@janvitos/pi-recent-models/model-selector-patch");
-const RECENT_ITEM = Symbol("pi-recent-models/recent-item");
-const MAX_VISIBLE_MODELS = 10;
 
 interface SelectorModelItem extends ModelReference {
 	model: unknown;
 }
 interface SelectorInstance {
 	currentModel?: ModelReference;
+	allModels: SelectorModelItem[];
 	activeModels: SelectorModelItem[];
 	filteredModels: SelectorModelItem[];
 	selectedIndex: number;
-	listContainer: { children: Component[] };
-	updateList?(): void;
+	getSearchInput?(): { getValue(): string };
 }
 
 type SortModels = (this: SelectorInstance, models: SelectorModelItem[]) => SelectorModelItem[];
@@ -43,8 +41,8 @@ interface PatchState {
 	originalSort: SortModels;
 	originalUpdate: UpdateList;
 	originalFilter: FilterModels;
+	normalAllModels: WeakMap<SelectorInstance, SelectorModelItem[]>;
 	history: ModelReference[];
-	formatHeader(text: string): string;
 	users: number;
 }
 
@@ -68,38 +66,24 @@ async function saveHistory(history: readonly ModelReference[]): Promise<void> {
 	}
 }
 
-function isRecentItem(item: SelectorModelItem | undefined): boolean {
-	return !!item && (item as SelectorModelItem & Record<PropertyKey, unknown>)[RECENT_ITEM] === true;
+function sameModelOrder(a: readonly ModelReference[], b: readonly ModelReference[]): boolean {
+	return a.length === b.length && a.every((model, index) => modelKey(model) === modelKey(b[index]!));
 }
 
-function addSectionHeaders(selector: SelectorInstance, state: PatchState): void {
-	const { filteredModels, listContainer, selectedIndex } = selector;
-	const startIndex = Math.max(
-		0,
-		Math.min(
-			selectedIndex - Math.floor(MAX_VISIBLE_MODELS / 2),
-			filteredModels.length - MAX_VISIBLE_MODELS,
-		),
-	);
-	const endIndex = Math.min(startIndex + MAX_VISIBLE_MODELS, filteredModels.length);
-	const visible = filteredModels.slice(startIndex, endIndex);
-	const components = listContainer.children;
-	const header = (label: string) => new Text(state.formatHeader(`  ${label}`), 0, 0);
+function orderUnfilteredModels(selector: SelectorInstance, history: readonly ModelReference[]): void {
+	if ((selector.getSearchInput?.().getValue() ?? "").length > 0) return;
+	const previous = selector.filteredModels;
+	const ordered = orderByRecentUse(previous, history, selector.currentModel);
+	if (sameModelOrder(previous, ordered)) return;
 
-	if (visible.length === 0) {
-		components.unshift(header("All Models"));
-		return;
-	}
-
-	let inserted = 0;
-	if (isRecentItem(visible[0])) {
-		components.unshift(header("Recent Models"));
-		inserted += 1;
-	}
-
-	const firstAllIndex = visible.findIndex((item) => !isRecentItem(item));
-	if (firstAllIndex >= 0) {
-		components.splice(firstAllIndex + inserted, 0, new Spacer(1), header("All Models"));
+	const selected = previous[selector.selectedIndex];
+	selector.filteredModels = ordered;
+	if (selected) {
+		const selectedKey = modelKey(selected);
+		const newIndex = ordered.findIndex((model) => modelKey(model) === selectedKey);
+		selector.selectedIndex = newIndex >= 0 ? newIndex : 0;
+	} else {
+		selector.selectedIndex = Math.min(selector.selectedIndex, Math.max(0, ordered.length - 1));
 	}
 }
 
@@ -129,47 +113,33 @@ function installSelectorPatch(history: ModelReference[]): { state: PatchState; r
 		originalSort: prototype.sortModels,
 		originalUpdate: prototype.updateList,
 		originalFilter: prototype.filterModels,
+		normalAllModels: new WeakMap(),
 		history,
-		formatHeader: (text) => text,
 		users: 1,
 	};
 
 	prototype.sortModels = function (models) {
 		const normalModels = state.originalSort.call(this, models);
-		const recentModels = getRecentModels(normalModels, state.history, this.currentModel).map((item) => ({
-			...item,
-			[RECENT_ITEM]: true,
-		}));
-		return [...recentModels, ...normalModels];
+		state.normalAllModels.set(this, normalModels);
+		return orderByRecentUse(normalModels, state.history, this.currentModel);
 	};
 	prototype.updateList = function () {
+		orderUnfilteredModels(this, state.history);
 		state.originalUpdate.call(this);
-		addSectionHeaders(this, state);
 	};
 	prototype.filterModels = function (query) {
+		const activeModels = this.activeModels;
+		const normalAllModels = state.normalAllModels.get(this);
+		if (query.length > 0 && activeModels === this.allModels && normalAllModels) {
+			this.activeModels = normalAllModels;
+			try {
+				state.originalFilter.call(this, query);
+			} finally {
+				this.activeModels = activeModels;
+			}
+			return;
+		}
 		state.originalFilter.call(this, query);
-		if (this.activeModels.some((item) => isRecentItem(item))) {
-			this.filteredModels = [
-				...this.filteredModels.filter((item) => isRecentItem(item)),
-				...this.filteredModels.filter((item) => !isRecentItem(item)),
-			];
-		} else {
-			const recentModels = getRecentModels(this.filteredModels, state.history, this.currentModel).map((item) => ({
-				...item,
-				[RECENT_ITEM]: true,
-			}));
-			this.filteredModels = [...recentModels, ...this.filteredModels];
-		}
-		const first = this.filteredModels[0];
-		if (
-			first &&
-			this.currentModel &&
-			first.provider === this.currentModel.provider &&
-			first.id === this.currentModel.id
-		) {
-			this.selectedIndex = 0;
-		}
-		this.updateList?.();
 	};
 	prototype[PATCH_KEY] = state;
 	return {
@@ -193,10 +163,6 @@ export default async function recentModels(pi: ExtensionAPI): Promise<void> {
 	const patch = installSelectorPatch(history);
 	let released = false;
 	let saveQueue = Promise.resolve();
-
-	pi.on("session_start", (_event, ctx) => {
-		patch.state.formatHeader = (text) => ctx.ui.theme.fg("accent", ctx.ui.theme.bold(text));
-	});
 
 	pi.on("model_select", async (event, ctx) => {
 		history = promoteModel(history, event.model);

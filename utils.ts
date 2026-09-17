@@ -1,5 +1,3 @@
-export const HISTORY_LIMIT = 5;
-
 export interface ModelReference {
 	provider: string;
 	id: string;
@@ -30,7 +28,6 @@ function normalizeHistory(values: unknown[]): ModelReference[] {
 		if (seen.has(key)) continue;
 		seen.add(key);
 		models.push({ provider: value.provider, id: value.id });
-		if (models.length === HISTORY_LIMIT) break;
 	}
 	return models;
 }
@@ -48,36 +45,40 @@ export function promoteModel(history: readonly ModelReference[], model: ModelRef
 	return [
 		{ provider: model.provider, id: model.id },
 		...history.filter((entry) => modelKey(entry) !== modelKey(model)),
-	].slice(0, HISTORY_LIMIT);
+	];
 }
 
 export function encodeHistory(history: readonly ModelReference[]): StoredHistory {
 	return { version: 1, models: normalizeHistory([...history]) };
 }
 
-export function getRecentModels<T extends ModelReference>(
+export function orderByRecentUse<T extends ModelReference>(
 	normalModels: readonly T[],
 	history: readonly ModelReference[],
 	currentModel?: ModelReference,
 ): T[] {
 	const effectiveHistory = currentModel ? promoteModel(history, currentModel) : history;
-	const byKey = new Map(normalModels.map((model) => [modelKey(model), model]));
-	const recent: T[] = [];
+	const byKey = new Map<string, T>();
+	for (const model of normalModels) {
+		const key = modelKey(model);
+		if (!byKey.has(key)) byKey.set(key, model);
+	}
+
+	const ordered: T[] = [];
 	const seen = new Set<string>();
 	for (const reference of effectiveHistory) {
 		const key = modelKey(reference);
 		if (seen.has(key)) continue;
-		seen.add(key);
 		const model = byKey.get(key);
-		if (model) recent.push(model);
+		if (!model) continue;
+		seen.add(key);
+		ordered.push(model);
 	}
-	return recent;
-}
-
-export function orderWithRecentDuplicates<T extends ModelReference>(
-	normalModels: readonly T[],
-	history: readonly ModelReference[],
-	currentModel?: ModelReference,
-): T[] {
-	return [...getRecentModels(normalModels, history, currentModel), ...normalModels];
+	for (const model of normalModels) {
+		const key = modelKey(model);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		ordered.push(model);
+	}
+	return ordered;
 }

@@ -1,7 +1,7 @@
 {
   "name": "@janvitos/pi-recent-models",
-  "version": "0.1.0",
-  "description": "Show the five most recently used models above Pi's complete model list.",
+  "version": "0.2.0",
+  "description": "Reorder Pi's model selector by recent use.",
   "type": "module",
   "license": "MIT",
   "author": "janvitos",
@@ -30,8 +30,7 @@
     "prepublishOnly": "npm test"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.84.2",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": ">=0.84.2"
   },
   "pi": {
     "extensions": [
