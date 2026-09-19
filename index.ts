@@ -1,20 +1,20 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
 	getAgentDir,
 	ModelSelectorComponent,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { RecentModelsStore, type ThinkingLevel } from "./state.ts";
+import { ThinkingMemory } from "./thinking-memory.ts";
 import {
-	decodeHistory,
-	encodeHistory,
 	modelKey,
 	orderByRecentUse,
 	promoteModel,
 	type ModelReference,
 } from "./utils.ts";
 
-const HISTORY_FILE = path.join(getAgentDir(), "recent-models.json");
+const STATE_FILE = path.join(getAgentDir(), "recent-models.json");
+const LEGACY_THINKING_FILE = path.join(getAgentDir(), "pi-thinking-memory.json");
 const PATCH_KEY = Symbol.for("@janvitos/pi-recent-models/model-selector-patch");
 
 interface SelectorModelItem extends ModelReference {
@@ -44,26 +44,6 @@ interface PatchState {
 	normalAllModels: WeakMap<SelectorInstance, SelectorModelItem[]>;
 	history: ModelReference[];
 	users: number;
-}
-
-async function loadHistory(): Promise<ModelReference[]> {
-	try {
-		return decodeHistory(JSON.parse(await fs.promises.readFile(HISTORY_FILE, "utf8")));
-	} catch (error: unknown) {
-		if ((error as { code?: unknown }).code === "ENOENT" || error instanceof SyntaxError) return [];
-		throw error;
-	}
-}
-
-async function saveHistory(history: readonly ModelReference[]): Promise<void> {
-	await fs.promises.mkdir(path.dirname(HISTORY_FILE), { recursive: true });
-	const temporary = `${HISTORY_FILE}.${process.pid}.${Date.now()}.tmp`;
-	try {
-		await fs.promises.writeFile(temporary, `${JSON.stringify(encodeHistory(history), null, 2)}\n`, "utf8");
-		await fs.promises.rename(temporary, HISTORY_FILE);
-	} finally {
-		await fs.promises.rm(temporary, { force: true });
-	}
 }
 
 function sameModelOrder(a: readonly ModelReference[], b: readonly ModelReference[]): boolean {
@@ -159,30 +139,82 @@ function releaseSelectorPatch(prototype: SelectorPrototype, state: PatchState): 
 }
 
 export default async function recentModels(pi: ExtensionAPI): Promise<void> {
-	let history = await loadHistory();
+	const store = new RecentModelsStore(STATE_FILE, LEGACY_THINKING_FILE);
+	let initialState = await store.load();
+	if (initialState.thinkingMemory.enabled && !initialState.thinkingMemory.legacyImported) {
+		initialState = await store.setThinkingMemoryEnabled(true) ?? initialState;
+	}
+	let history = initialState.models;
+	let thinkingEnabled = initialState.thinkingMemory.enabled;
 	const patch = installSelectorPatch(history);
+	const memory = new ThinkingMemory({
+		get: (model) => store.getThinkingLevel(model),
+		set: (model, level) => store.setThinkingLevel(model, level),
+		drain: () => store.drain(),
+	});
 	let released = false;
-	let saveQueue = Promise.resolve();
+
+	pi.registerCommand("recent-models-settings", {
+		description: "Configure recent-model and per-model thinking preferences",
+		handler: async (_args, ctx) => {
+			const setting = `Per-model thinking memory (active: ${thinkingEnabled ? "on" : "off"})`;
+			if (await ctx.ui.select("Recent models settings", [setting]) !== setting) return;
+			const choice = await ctx.ui.select("Remember a thinking level for each model", ["Off (default)", "On"]);
+			if (choice === undefined) return;
+			const enabled = choice === "On";
+			const state = await store.setThinkingMemoryEnabled(enabled);
+			if (!state) {
+				ctx.ui.notify("Could not save recent-model settings.", "error");
+				return;
+			}
+			thinkingEnabled = enabled;
+			if (enabled) memory.start(ctx.model, pi.getThinkingLevel());
+			else await memory.stop();
+			ctx.ui.notify(`Per-model thinking memory ${enabled ? "on" : "off"}.`, "info");
+		},
+	});
+
+	pi.on("session_start", (_event, ctx) => {
+		if (thinkingEnabled) memory.start(ctx.model, pi.getThinkingLevel());
+	});
+
+	pi.on("thinking_level_select", async (event, ctx) => {
+		if (!thinkingEnabled) return;
+		await memory.thinkingLevelSelected(ctx.model, event.level, pi.getThinkingLevel());
+	});
 
 	pi.on("model_select", async (event, ctx) => {
 		history = promoteModel(history, event.model);
 		patch.state.history = history;
-		const snapshot = history;
-		try {
-			saveQueue = saveQueue.then(
-				() => saveHistory(snapshot),
-				() => saveHistory(snapshot),
-			);
-			await saveQueue;
-		} catch (error: unknown) {
-			const detail = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`Could not save recent model history: ${detail}`, "warning");
-		}
+
+		const historyUpdate = store.promote(event.model).then((state) => {
+			if (!state) {
+				ctx.ui.notify("Could not save recent model history.", "warning");
+				return;
+			}
+			history = state.models;
+			patch.state.history = history;
+		});
+		const thinkingUpdate = thinkingEnabled
+			? memory.modelSelected({
+				model: event.model,
+				source: event.source,
+				pinnedThinkingLevel: ctx.scopedModels.find(
+					(entry) => entry.model.provider === event.model.provider && entry.model.id === event.model.id,
+				)?.thinkingLevel as ThinkingLevel | undefined,
+				getCurrentModel: () => ctx.model,
+				getEffectiveLevel: () => pi.getThinkingLevel(),
+				applyThinkingLevel: (level) => pi.setThinkingLevel(level),
+			})
+			: Promise.resolve();
+		await Promise.all([historyUpdate, thinkingUpdate]);
 	});
 
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", async () => {
 		if (released) return;
 		released = true;
 		patch.release();
+		await memory.stop();
+		await store.drain();
 	});
 }

@@ -1,7 +1,7 @@
 {
   "name": "@janvitos/pi-recent-models",
-  "version": "0.2.0",
-  "description": "Reorder Pi's model selector by recent use.",
+  "version": "0.3.0",
+  "description": "Reorder Pi's model selector and optionally remember thinking levels per model.",
   "type": "module",
   "license": "MIT",
   "author": "janvitos",
@@ -13,24 +13,37 @@
     "pi-package",
     "pi-coding-agent",
     "models",
-    "mru"
+    "mru",
+    "thinking-level",
+    "reasoning-effort"
   ],
   "engines": {
     "node": ">=22.6"
   },
   "files": [
     "index.ts",
+    "state.ts",
+    "thinking-memory.ts",
     "utils.ts"
   ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test utils.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && node --experimental-strip-types --test *.test.ts",
     "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.84.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "typescript": "^5.9.0"
   },
   "pi": {
     "extensions": [
