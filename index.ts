@@ -200,7 +200,7 @@ export default async function recentModels(pi: ExtensionAPI): Promise<void> {
 			newSessionModelHandoff.clear();
 			return;
 		}
-		newSessionModelHandoff.beforeSwitch(event.reason, ctx.model);
+		newSessionModelHandoff.beforeSwitch(event.reason, ctx.model, pi.getThinkingLevel());
 	});
 
 	pi.on("session_start", async (event, ctx) => {
@@ -212,13 +212,15 @@ export default async function recentModels(pi: ExtensionAPI): Promise<void> {
 					`Could not inherit model ${inheritedModel.provider}/${inheritedModel.id}; using Pi's normal new-session model.`,
 					"warning",
 				);
-			} else if (!ctx.model || modelKey(ctx.model) !== modelKey(model)) {
-				const applied = await pi.setModel(model);
+			} else {
+				const applied = !ctx.model || modelKey(ctx.model) === modelKey(model) || await pi.setModel(model);
 				if (!applied) {
 					ctx.ui.notify(
 						`Could not inherit model ${inheritedModel.provider}/${inheritedModel.id}; using Pi's normal new-session model.`,
 						"warning",
 					);
+				} else {
+					pi.setThinkingLevel(inheritedModel.thinkingLevel);
 				}
 			}
 		}

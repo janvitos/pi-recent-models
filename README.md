@@ -25,7 +25,7 @@ When enabled:
 - `/resume`, `/fork`, startup, and reload keep Pi's normal session/default-model behavior;
 - if the model is unavailable, Pi keeps its normal new-session model and shows a warning.
 
-The handoff is one-shot and process-local. It is not a global last-model preference and does not copy the previous session's thinking level.
+The handoff is one-shot and process-local. It is not a global last-model preference and copies the previous session's effective thinking level along with the model. Pi clamps levels unsupported by the inherited model.
 
 ## Per-model thinking memory
 
@@ -43,6 +43,7 @@ Preferences use the exact provider and model ID, so `openai/model` and `proxy/mo
 Pi remains authoritative:
 
 - startup and restored-session thinking levels are not replaced;
+- an explicit `/new` inheritance handoff applies the previous session's effective level;
 - a scoped model entry that pins a thinking level wins;
 - unsupported saved levels are clamped by Pi and the effective value is saved;
 - rapid model switches and manual thinking changes supersede pending restoration work.
