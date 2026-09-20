@@ -5,6 +5,7 @@ import {
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { RecentModelsStore, type ThinkingLevel } from "./state.ts";
+import { NewSessionModelHandoff } from "./new-session-model.ts";
 import { ThinkingMemory } from "./thinking-memory.ts";
 import {
 	modelKey,
@@ -15,6 +16,7 @@ import {
 
 const STATE_FILE = path.join(getAgentDir(), "recent-models.json");
 const LEGACY_THINKING_FILE = path.join(getAgentDir(), "pi-thinking-memory.json");
+const newSessionModelHandoff = new NewSessionModelHandoff();
 const PATCH_KEY = Symbol.for("@janvitos/pi-recent-models/model-selector-patch");
 
 interface SelectorModelItem extends ModelReference {
@@ -146,6 +148,7 @@ export default async function recentModels(pi: ExtensionAPI): Promise<void> {
 	}
 	let history = initialState.models;
 	let thinkingEnabled = initialState.thinkingMemory.enabled;
+	let inheritModelOnNewSession = initialState.inheritModelOnNewSession;
 	const patch = installSelectorPatch(history);
 	const memory = new ThinkingMemory({
 		get: (model) => store.getThinkingLevel(model),
@@ -155,26 +158,70 @@ export default async function recentModels(pi: ExtensionAPI): Promise<void> {
 	let released = false;
 
 	pi.registerCommand("recent-models-settings", {
-		description: "Configure recent-model and per-model thinking preferences",
+		description: "Configure recent-model and session model preferences",
 		handler: async (_args, ctx) => {
-			const setting = `Per-model thinking memory (active: ${thinkingEnabled ? "on" : "off"})`;
-			if (await ctx.ui.select("Recent models settings", [setting]) !== setting) return;
-			const choice = await ctx.ui.select("Remember a thinking level for each model", ["Off (default)", "On"]);
+			const thinkingSetting = `Per-model thinking memory (active: ${thinkingEnabled ? "on" : "off"})`;
+			const inheritSetting = `Inherit model on /new (active: ${inheritModelOnNewSession ? "on" : "off"})`;
+			const selected = await ctx.ui.select("Recent models settings", [thinkingSetting, inheritSetting]);
+			if (selected === undefined) return;
+
+			if (selected === thinkingSetting) {
+				const choice = await ctx.ui.select("Remember a thinking level for each model", ["Off (default)", "On"]);
+				if (choice === undefined) return;
+				const enabled = choice === "On";
+				const state = await store.setThinkingMemoryEnabled(enabled);
+				if (!state) {
+					ctx.ui.notify("Could not save recent-model settings.", "error");
+					return;
+				}
+				thinkingEnabled = enabled;
+				if (enabled) memory.start(ctx.model, pi.getThinkingLevel());
+				else await memory.stop();
+				ctx.ui.notify(`Per-model thinking memory ${enabled ? "on" : "off"}.`, "info");
+				return;
+			}
+
+			const choice = await ctx.ui.select("Inherit the current model when creating a new session", ["Off (default)", "On"]);
 			if (choice === undefined) return;
 			const enabled = choice === "On";
-			const state = await store.setThinkingMemoryEnabled(enabled);
+			const state = await store.setInheritModelOnNewSessionEnabled(enabled);
 			if (!state) {
 				ctx.ui.notify("Could not save recent-model settings.", "error");
 				return;
 			}
-			thinkingEnabled = enabled;
-			if (enabled) memory.start(ctx.model, pi.getThinkingLevel());
-			else await memory.stop();
-			ctx.ui.notify(`Per-model thinking memory ${enabled ? "on" : "off"}.`, "info");
+			inheritModelOnNewSession = enabled;
+			if (!enabled) newSessionModelHandoff.clear();
+			ctx.ui.notify(`Model inheritance on /new ${enabled ? "on" : "off"}.`, "info");
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_before_switch", (event, ctx) => {
+		if (!inheritModelOnNewSession) {
+			newSessionModelHandoff.clear();
+			return;
+		}
+		newSessionModelHandoff.beforeSwitch(event.reason, ctx.model);
+	});
+
+	pi.on("session_start", async (event, ctx) => {
+		const inheritedModel = newSessionModelHandoff.consume(event.reason, inheritModelOnNewSession);
+		if (inheritedModel) {
+			const model = ctx.modelRegistry.find(inheritedModel.provider, inheritedModel.id);
+			if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
+				ctx.ui.notify(
+					`Could not inherit model ${inheritedModel.provider}/${inheritedModel.id}; using Pi's normal new-session model.`,
+					"warning",
+				);
+			} else if (!ctx.model || modelKey(ctx.model) !== modelKey(model)) {
+				const applied = await pi.setModel(model);
+				if (!applied) {
+					ctx.ui.notify(
+						`Could not inherit model ${inheritedModel.provider}/${inheritedModel.id}; using Pi's normal new-session model.`,
+						"warning",
+					);
+				}
+			}
+		}
 		if (thinkingEnabled) memory.start(ctx.model, pi.getThinkingLevel());
 	});
 
@@ -210,7 +257,8 @@ export default async function recentModels(pi: ExtensionAPI): Promise<void> {
 		await Promise.all([historyUpdate, thinkingUpdate]);
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (event) => {
+		newSessionModelHandoff.beforeShutdown(event.reason);
 		if (released) return;
 		released = true;
 		patch.release();

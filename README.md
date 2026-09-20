@@ -14,6 +14,19 @@ A [Pi coding agent](https://github.com/earendil-works/pi-mono) extension that re
 
 Pi’s model command is `/model` (singular), and Ctrl+L opens the same selector.
 
+## Inherit the model on `/new`
+
+Model inheritance is **off by default**. Run `/recent-models-settings`, select **Inherit model on /new**, and choose **On** to make a newly created session start with the model selected in the session being replaced.
+
+When enabled:
+
+- `/new` inherits the active session's provider/model selection;
+- the inherited selection is recorded in the new session, so sessions remain independent;
+- `/resume`, `/fork`, startup, and reload keep Pi's normal session/default-model behavior;
+- if the model is unavailable, Pi keeps its normal new-session model and shows a warning.
+
+The handoff is one-shot and process-local. It is not a global last-model preference and does not copy the previous session's thinking level.
+
 ## Per-model thinking memory
 
 Thinking memory is **off by default**. Run `/recent-models-settings`, select **Per-model thinking memory**, and choose **On** to enable it globally.
@@ -44,13 +57,13 @@ Remove the standalone `@janvitos/pi-thinking-memory` package before enabling thi
 
 ## Storage
 
-Global history, the thinking-memory setting, and thinking preferences are stored at:
+Global history, the session-model setting, the thinking-memory setting, and thinking preferences are stored at:
 
 ```text
 ~/.pi/agent/recent-models.json
 ```
 
-The actual path uses Pi’s active agent directory. Legacy bare-array and version-1 recent-history files upgrade automatically with thinking memory disabled. Updates are serialized, protected by an inter-process lock, merged with current on-disk state, and committed by atomic rename with private file permissions.
+The actual path uses Pi’s active agent directory. Legacy bare-array and version-1 recent-history files upgrade automatically with both optional features disabled. Existing version-2 state without the session-model setting also defaults it to disabled. Updates are serialized, protected by an inter-process lock, merged with current on-disk state, and committed by atomic rename with private file permissions.
 
 Malformed current-version entries are logged and repaired on the next update while valid entries are retained. An unknown newer schema version is not overwritten.
 
@@ -103,7 +116,7 @@ npm test
 npm pack --dry-run
 ```
 
-The tests cover recent ordering, state validation and migration, concurrent persistence, exact model identities, default-off and enable/disable behavior, session and scoped-model precedence, clamping, delayed thinking events, and rapid model switches.
+The tests cover recent ordering, state validation and migration, concurrent persistence, exact model identities, default-off and enable/disable behavior, new-session model inheritance, session and scoped-model precedence, clamping, delayed thinking events, and rapid model switches.
 
 ## License
 

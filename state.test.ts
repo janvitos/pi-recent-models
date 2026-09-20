@@ -25,6 +25,7 @@ test("legacy history formats upgrade with thinking memory disabled", () => {
 		assert.equal(decoded.kind, "current");
 		if (decoded.kind !== "current") continue;
 		assert.deepEqual(decoded.state.models, [models[0]]);
+		assert.equal(decoded.state.inheritModelOnNewSession, false);
 		assert.deepEqual(decoded.state.thinkingMemory, {
 			enabled: false,
 			legacyImported: false,
@@ -37,6 +38,7 @@ test("current state validation repairs invalid entries and encodes deterministic
 	const decoded = decodeState({
 		version: 2,
 		models: [{ provider: "p", id: "one" }, { provider: "", id: "bad" }],
+		inheritModelOnNewSession: "yes",
 		thinkingMemory: {
 			enabled: true,
 			legacyImported: true,
@@ -50,11 +52,23 @@ test("current state validation repairs invalid entries and encodes deterministic
 	});
 	assert.equal(decoded.kind, "current");
 	if (decoded.kind !== "current") return;
-	assert.ok(decoded.issues.length >= 3);
+	assert.ok(decoded.issues.length >= 4);
+	assert.equal(decoded.state.inheritModelOnNewSession, false);
 	assert.deepEqual(decoded.state.thinkingMemory.preferences.find((entry) => entry.id === "c")?.thinkingLevel, "medium");
 	const encoded = JSON.parse(encodeState(decoded.state));
 	assert.deepEqual(encoded.thinkingMemory.preferences.map((entry: { provider: string; id: string }) => `${entry.provider}/${entry.id}`), ["a/c", "z/b"]);
 	assert.deepEqual(decodeState({ version: 99, models: [] }), { kind: "future", version: 99 });
+});
+
+test("new-session model inheritance defaults off and persists independently", async () => {
+	await withTempStore(async (store) => {
+		assert.equal((await store.load()).inheritModelOnNewSession, false);
+		const enabled = await store.setInheritModelOnNewSessionEnabled(true);
+		assert.equal(enabled?.inheritModelOnNewSession, true);
+		assert.equal((await store.load()).inheritModelOnNewSession, true);
+		const disabled = await store.setInheritModelOnNewSessionEnabled(false);
+		assert.equal(disabled?.inheritModelOnNewSession, false);
+	});
 });
 
 test("the feature defaults off and retains preferences while disabled", async () => {

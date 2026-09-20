@@ -14,6 +14,7 @@ export interface ThinkingPreference extends ModelReference {
 export interface RecentModelsState {
 	version: 2;
 	models: ModelReference[];
+	inheritModelOnNewSession: boolean;
 	thinkingMemory: {
 		enabled: boolean;
 		legacyImported: boolean;
@@ -45,6 +46,7 @@ function emptyState(): RecentModelsState {
 	return {
 		version: FILE_VERSION,
 		models: [],
+		inheritModelOnNewSession: false,
 		thinkingMemory: { enabled: false, legacyImported: false, preferences: [] },
 	};
 }
@@ -119,6 +121,10 @@ export function decodeState(value: unknown): DecodedState {
 	if (Array.isArray(value.models)) state.models = normalizeModels(value.models, issues);
 	else issues.push("models must be an array");
 
+	if (value.inheritModelOnNewSession !== undefined) {
+		if (typeof value.inheritModelOnNewSession === "boolean") state.inheritModelOnNewSession = value.inheritModelOnNewSession;
+		else issues.push("inheritModelOnNewSession must be a boolean");
+	}
 	if (!isRecord(value.thinkingMemory)) {
 		issues.push("thinkingMemory must be an object");
 		return { kind: "current", state, issues };
@@ -151,6 +157,7 @@ export function encodeState(state: RecentModelsState): string {
 	return `${JSON.stringify({
 		version: FILE_VERSION,
 		models: normalizeModels(state.models),
+		inheritModelOnNewSession: state.inheritModelOnNewSession,
 		thinkingMemory: {
 			enabled: state.thinkingMemory.enabled,
 			legacyImported: state.thinkingMemory.legacyImported,
@@ -224,6 +231,12 @@ export class RecentModelsStore {
 				{ provider: model.provider, id: model.id, thinkingLevel },
 			];
 		}).then((state) => state !== undefined);
+	}
+
+	setInheritModelOnNewSessionEnabled(enabled: boolean): Promise<RecentModelsState | undefined> {
+		return this.update((state) => {
+			state.inheritModelOnNewSession = enabled;
+		});
 	}
 
 	setThinkingMemoryEnabled(enabled: boolean): Promise<RecentModelsState | undefined> {
